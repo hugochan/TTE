@@ -47,7 +47,7 @@ int *word_hash_table, *doc_hash_table, *ww_neg_table, *wd_neg_table;
 int max_num_vertices = 1, num_word_vertices = 0, num_doc_vertices = 0, num_topic_vertices = 0;
 long long total_samples = 1, current_sample_count = 0, num_ww_edges = 0, num_wd_edges = 0;
 real init_rho = 0.025, rho;
-real *word_emb_vertex, *word_emb_context, *doc_emb_vertex, *doc_emb_context, *sigmoid_table;
+real *word_emb_vertex, *word_emb_context, *doc_emb_vertex, *doc_emb_context, *topic_emb_vertex, *topic_emb_context, *sigmoid_table;
 
 int *ww_edge_source_id, *ww_edge_target_id, *wd_edge_source_id, *wd_edge_target_id;
 double *ww_edge_weight, *wd_edge_weight;
@@ -306,9 +306,9 @@ void InitAliasTable(long long num_edges, double *edge_weight, int type)
 
 long long SampleAnEdge(double rand_value1, double rand_value2, int type)
 {
-	int num_edges;
-	double *prob;
-	long long *alias;
+	int num_edges = 0;
+	double *prob = NULL;
+	long long *alias = NULL;
 
 	if (type == 0) // word-word network
 	{
@@ -351,7 +351,11 @@ void InitVector(int type, int num_vertices)
 	{
 		doc_emb_vertex = emb_vertex;
 		doc_emb_context = emb_context;
-
+	}
+	else // topic
+	{
+		topic_emb_vertex = emb_vertex;
+		topic_emb_context = emb_context;
 	}
 }
 
@@ -429,59 +433,59 @@ void Update(real *vec_u, real *vec_v, real *vec_error, int label)
 	for (int c = 0; c != dim; c++) vec_v[c] += g * vec_u[c];
 }
 
-void *TrainLINEThread(void *id)
-{
-	long long u, v, lu, lv, target, label;
-	long long count = 0, last_count = 0, curedge;
-	unsigned long long seed = (long long)id;
-	real *vec_error = (real *)calloc(dim, sizeof(real));
+// void *TrainLINEThread(void *id)
+// {
+// 	long long u, v, lu, lv, target, label;
+// 	long long count = 0, last_count = 0, curedge;
+// 	unsigned long long seed = (long long)id;
+// 	real *vec_error = (real *)calloc(dim, sizeof(real));
 
-	while (1)
-	{
-		//judge for exit
-		if (count > total_samples / num_threads + 2) break;
+// 	while (1)
+// 	{
+// 		//judge for exit
+// 		if (count > total_samples / num_threads + 2) break;
 
-		if (count - last_count>10000)
-		{
-			current_sample_count += count - last_count;
-			last_count = count;
-			printf("%cRho: %f  Progress: %.3lf%%", 13, rho, (real)current_sample_count / (real)(total_samples + 1) * 100);
-			fflush(stdout);
-			rho = init_rho * (1 - current_sample_count / (real)(total_samples + 1));
-			if (rho < init_rho * 0.0001) rho = init_rho * 0.0001;
-		}
+// 		if (count - last_count>10000)
+// 		{
+// 			current_sample_count += count - last_count;
+// 			last_count = count;
+// 			printf("%cRho: %f  Progress: %.3lf%%", 13, rho, (real)current_sample_count / (real)(total_samples + 1) * 100);
+// 			fflush(stdout);
+// 			rho = init_rho * (1 - current_sample_count / (real)(total_samples + 1));
+// 			if (rho < init_rho * 0.0001) rho = init_rho * 0.0001;
+// 		}
 
-		curedge = SampleAnEdge(gsl_rng_uniform(gsl_r), gsl_rng_uniform(gsl_r));
-		u = edge_source_id[curedge];
-		v = edge_target_id[curedge];
+// 		curedge = SampleAnEdge(gsl_rng_uniform(gsl_r), gsl_rng_uniform(gsl_r), 0);
+// 		u = edge_source_id[curedge];
+// 		v = edge_target_id[curedge];
 
-		lu = u * dim;
-		for (int c = 0; c != dim; c++) vec_error[c] = 0;
+// 		lu = u * dim;
+// 		for (int c = 0; c != dim; c++) vec_error[c] = 0;
 
-		// NEGATIVE SAMPLING
-		for (int d = 0; d != num_negative + 1; d++)
-		{
-			if (d == 0)
-			{
-				target = v;
-				label = 1;
-			}
-			else
-			{
-				target = neg_table[Rand(seed)];
-				label = 0;
-			}
-			lv = target * dim;
-			if (order == 1) Update(&emb_vertex[lu], &emb_vertex[lv], vec_error, label);
-			if (order == 2) Update(&emb_vertex[lu], &emb_context[lv], vec_error, label);
-		}
-		for (int c = 0; c != dim; c++) emb_vertex[c + lu] += vec_error[c];
+// 		// NEGATIVE SAMPLING
+// 		for (int d = 0; d != num_negative + 1; d++)
+// 		{
+// 			if (d == 0)
+// 			{
+// 				target = v;
+// 				label = 1;
+// 			}
+// 			else
+// 			{
+// 				target = neg_table[Rand(seed)];
+// 				label = 0;
+// 			}
+// 			lv = target * dim;
+// 			if (order == 1) Update(&emb_vertex[lu], &emb_vertex[lv], vec_error, label);
+// 			if (order == 2) Update(&emb_vertex[lu], &emb_context[lv], vec_error, label);
+// 		}
+// 		for (int c = 0; c != dim; c++) emb_vertex[c + lu] += vec_error[c];
 
-		count++;
-	}
-	free(vec_error);
-	pthread_exit(NULL);
-}
+// 		count++;
+// 	}
+// 	free(vec_error);
+// 	pthread_exit(NULL);
+// }
 
 // void Output()
 // {
@@ -498,7 +502,7 @@ void *TrainLINEThread(void *id)
 // }
 
 void TrainLINE() {
-	long a;
+	// long a;
 	// pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
 
 	if (order != 1 && order != 2)
@@ -528,6 +532,8 @@ void TrainLINE() {
 	InitAliasTable(num_wd_edges, wd_edge_weight, 1); // word-doc network
 	InitVector(0, num_word_vertices); // word
 	InitVector(1, num_doc_vertices); // doc
+	InitVector(2, n_topics); // topic
+
 	InitNegTable(0); // word-word network
 	InitNegTable(1); // word-doc network
 	InitSigmoidTable();
