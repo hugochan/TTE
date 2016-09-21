@@ -24,10 +24,16 @@ Publication: Jian Tang, Meng Qu, Mingzhe Wang, Ming Zhang, Jun Yan, Qiaozhu Mei.
 #define MAX_STRING 100
 #define SIGMOID_BOUND 6
 #define NEG_SAMPLING_POWER 0.75
+#define WW_TYPE 0
+#define WD_TYPE 1
+#define WORD_TYPE 0
+#define DOC_TYPE 1
+#define TOPIC_TYPE 2
 
 const int hash_table_size = 30000000;
 const int neg_table_size = 1e8;
 const int sigmoid_table_size = 1000;
+
 
 typedef float real;                    // Precision of float numbers
 
@@ -127,7 +133,7 @@ void ReadData(char *network_file, int type)
 	int *edge_source_id, *edge_target_id;
 	double *edge_weight;
 
-	if (type == 0) // word-word network
+	if (type == WW_TYPE) // word-word network
 	{
 		source_num_vertices = &num_word_vertices;
 		target_num_vertices = &num_word_vertices;
@@ -137,7 +143,7 @@ void ReadData(char *network_file, int type)
 		source_hash_table = word_hash_table;
 		target_hash_table = word_hash_table;
 	}
-	else if (type == 1)// word-doc network
+	else if (type == WD_TYPE)// word-doc network
 	{
 		source_num_vertices = &num_word_vertices;
 		target_num_vertices = &num_doc_vertices;
@@ -191,14 +197,14 @@ void ReadData(char *network_file, int type)
 		if (vid == -1)
 		{
 			source_vertex = AddVertex(source_hash_table, source_vertex, source_num_vertices, name_v1);
-			if (type == 0) // word-word
+			if (type == WW_TYPE) // word-word
 				target_vertex = source_vertex;
 			vid = *source_num_vertices - 1;
 		}
 
-		if (type == 0) // word-word
+		if (type == WW_TYPE) // word-word
 			source_vertex[vid].degree[0] += weight;
-		else if (type ==1) // word-doc
+		else if (type == WD_TYPE) // word-doc
 			source_vertex[vid].degree[1] += weight;
 
 		edge_source_id[k] = vid;
@@ -208,7 +214,7 @@ void ReadData(char *network_file, int type)
 		if (vid == -1)
 		{
 			target_vertex = AddVertex(target_hash_table, target_vertex, target_num_vertices, name_v2);
-			if (type == 0) // word-word
+			if (type == WW_TYPE) // word-word
 				source_vertex = target_vertex;
 			vid = *target_num_vertices - 1;
 		}
@@ -218,7 +224,7 @@ void ReadData(char *network_file, int type)
 	}
 	fclose(fin);
 
-	if (type == 0) // word-word network
+	if (type == WW_TYPE) // word-word network
 	{
 		word_vertex = source_vertex;
 
@@ -226,7 +232,7 @@ void ReadData(char *network_file, int type)
 		ww_edge_target_id = edge_target_id;
 		ww_edge_weight = edge_weight;
 	}
-	else if (type == 1) // word-doc network
+	else if (type == WD_TYPE) // word-doc network
 	{
 		word_vertex = source_vertex;
 		doc_vertex = target_vertex;
@@ -288,12 +294,12 @@ void InitAliasTable(long long num_edges, double *edge_weight, int type)
 	while (num_large_block) prob[large_block[--num_large_block]] = 1;
 	while (num_small_block) prob[small_block[--num_small_block]] = 1;
 
-	if (type == 0) // word-word network
+	if (type == WW_TYPE) // word-word network
 	{
 		ww_alias = alias;
 		ww_prob = prob;
 	}
-	else if (type == 1)// word-doc network
+	else if (type == WD_TYPE)// word-doc network
 	{
 		wd_alias = alias;
 		wd_prob = prob;
@@ -310,13 +316,13 @@ long long SampleAnEdge(double rand_value1, double rand_value2, int type)
 	double *prob = NULL;
 	long long *alias = NULL;
 
-	if (type == 0) // word-word network
+	if (type == WW_TYPE) // word-word network
 	{
 		num_edges = num_ww_edges;
 		prob = ww_prob;
 		alias = ww_alias;
 	}
-	else if (type == 1) // word-doc network
+	else if (type == WD_TYPE) // word-doc network
 	{
 		num_edges = num_wd_edges;
 		prob = wd_prob;
@@ -342,12 +348,12 @@ void InitVector(int type, int num_vertices)
 	for (b = 0; b < dim; b++) for (a = 0; a < num_vertices; a++)
 		emb_context[a * dim + b] = 0;
 
-	if (type == 0) // word
+	if (type == WORD_TYPE) // word
 	{
 		word_emb_vertex = emb_vertex;
 		word_emb_context = emb_context;
 	}
-	else if (type == 1) // doc
+	else if (type == DOC_TYPE) // doc
 	{
 		doc_emb_vertex = emb_vertex;
 		doc_emb_context = emb_context;
@@ -364,12 +370,12 @@ void InitNegTable(int type)
 {
 	int num_vertices = 0;
 	struct ClassVertex *vertex;
-	if (type == 0) // word-word network
+	if (type == WW_TYPE) // word-word network
 	{
 		num_vertices = num_word_vertices;
 		vertex = word_vertex;
 	}
-	else if (type == 1) // word-doc network
+	else if (type == WD_TYPE) // word-doc network
 	{
 		num_vertices = num_word_vertices;
 		vertex = word_vertex;
@@ -390,9 +396,9 @@ void InitNegTable(int type)
 		neg_table[k] = vid - 1;
 	}
 
-	if (type == 0) // word-word network
+	if (type == WW_TYPE) // word-word network
 		ww_neg_table = neg_table;
-	else if (type == 1) // word-doc network
+	else if (type == WD_TYPE) // word-doc network
 		wd_neg_table = neg_table;
 }
 
@@ -423,87 +429,160 @@ int Rand(unsigned long long &seed)
 	return (seed >> 16) % neg_table_size;
 }
 
-/* Update embeddings */
+/* Update embeddings
+vec_u and vec_v are source and target embeddings, respectively.
+*/
 void Update(real *vec_u, real *vec_v, real *vec_error, int label)
 {
 	real x = 0, g;
 	for (int c = 0; c != dim; c++) x += vec_u[c] * vec_v[c];
 	g = (label - FastSigmoid(x)) * rho;
-	for (int c = 0; c != dim; c++) vec_error[c] += g * vec_v[c];
-	for (int c = 0; c != dim; c++) vec_v[c] += g * vec_u[c];
+	for (int c = 0; c != dim; c++) vec_error[c] += g * vec_u[c]; // vec_error is used to update target embeddings
+	for (int c = 0; c != dim; c++) vec_u[c] += g * vec_v[c];
 }
 
-// void *TrainLINEThread(void *id)
-// {
-// 	long long u, v, lu, lv, target, label;
-// 	long long count = 0, last_count = 0, curedge;
-// 	unsigned long long seed = (long long)id;
-// 	real *vec_error = (real *)calloc(dim, sizeof(real));
+void *TrainLINEThread(void *id)
+{
+	long long u, v, lu, lv, source, label;
+	long long count = 0, last_count = 0, curedge;
+	unsigned long long seed = (long long)id;
+	real *vec_error = (real *)calloc(dim, sizeof(real));
+	// real *emb_vertex, *emb_context;
 
-// 	while (1)
-// 	{
-// 		//judge for exit
-// 		if (count > total_samples / num_threads + 2) break;
+	while (1)
+	{
+		//judge for exit
+		if (count > total_samples / num_threads + 2) break;
 
-// 		if (count - last_count>10000)
-// 		{
-// 			current_sample_count += count - last_count;
-// 			last_count = count;
-// 			printf("%cRho: %f  Progress: %.3lf%%", 13, rho, (real)current_sample_count / (real)(total_samples + 1) * 100);
-// 			fflush(stdout);
-// 			rho = init_rho * (1 - current_sample_count / (real)(total_samples + 1));
-// 			if (rho < init_rho * 0.0001) rho = init_rho * 0.0001;
-// 		}
+		if (count - last_count > 10000)
+		{
+			current_sample_count += count - last_count;
+			last_count = count;
+			printf("%cRho: %f  Progress: %.3lf%%", 13, rho, (real)current_sample_count / (real)(total_samples + 1) * 100);
+			fflush(stdout);
+			rho = init_rho * (1 - current_sample_count / (real)(total_samples + 1));
+			if (rho < init_rho * 0.0001) rho = init_rho * 0.0001;
+		}
 
-// 		curedge = SampleAnEdge(gsl_rng_uniform(gsl_r), gsl_rng_uniform(gsl_r), 0);
-// 		u = edge_source_id[curedge];
-// 		v = edge_target_id[curedge];
 
-// 		lu = u * dim;
-// 		for (int c = 0; c != dim; c++) vec_error[c] = 0;
+		// 1) sample an edge from Eww and draw num_negative negative edges
+		curedge = SampleAnEdge(gsl_rng_uniform(gsl_r), gsl_rng_uniform(gsl_r), WW_TYPE);
+		u = ww_edge_source_id[curedge];
+		v = ww_edge_target_id[curedge];
 
-// 		// NEGATIVE SAMPLING
-// 		for (int d = 0; d != num_negative + 1; d++)
-// 		{
-// 			if (d == 0)
-// 			{
-// 				target = v;
-// 				label = 1;
-// 			}
-// 			else
-// 			{
-// 				target = neg_table[Rand(seed)];
-// 				label = 0;
-// 			}
-// 			lv = target * dim;
-// 			if (order == 1) Update(&emb_vertex[lu], &emb_vertex[lv], vec_error, label);
-// 			if (order == 2) Update(&emb_vertex[lu], &emb_context[lv], vec_error, label);
-// 		}
-// 		for (int c = 0; c != dim; c++) emb_vertex[c + lu] += vec_error[c];
+		lv = v * dim;
+		for (int c = 0; c != dim; c++) vec_error[c] = 0;
 
-// 		count++;
-// 	}
-// 	free(vec_error);
-// 	pthread_exit(NULL);
-// }
+		// NEGATIVE SAMPLING
+		for (int d = 0; d != num_negative + 1; d++)
+		{
+			if (d == 0) // positive sample
+			{
+				source = u;
+				label = 1;
+			}
+			else // negative samples
+			{
+				source = v;
+				while (source == v) // source id should be distinguished from target id
+					source = ww_neg_table[Rand(seed)];
+				label = 0;
+			}
+			lu = source * dim;
+			if (order == 2) Update(&word_emb_vertex[lu], &word_emb_vertex[lv], vec_error, label);
+		}
 
-// void Output()
-// {
-// 	FILE *fo = fopen(embedding_file, "wb");
-// 	fprintf(fo, "%d %d\n", num_vertices, dim);
-// 	for (int a = 0; a < num_vertices; a++)
-// 	{
-// 		fprintf(fo, "%s ", vertex[a].name);
-// 		if (is_binary) for (int b = 0; b < dim; b++) fwrite(&emb_vertex[a * dim + b], sizeof(real), 1, fo);
-// 		else for (int b = 0; b < dim; b++) fprintf(fo, "%lf ", emb_vertex[a * dim + b]);
-// 		fprintf(fo, "\n");
-// 	}
-// 	fclose(fo);
-// }
+		// update target embedding
+		for (int c = 0; c != dim; c++) word_emb_vertex[c + lv] += vec_error[c];
+
+
+
+		// 2) sample an edge from Ewd and draw num_negative negative edges
+		curedge = SampleAnEdge(gsl_rng_uniform(gsl_r), gsl_rng_uniform(gsl_r), WD_TYPE);
+		u = wd_edge_source_id[curedge];
+		v = wd_edge_target_id[curedge];
+
+		lv = v * dim;
+		for (int c = 0; c != dim; c++) vec_error[c] = 0;
+
+		// NEGATIVE SAMPLING
+		for (int d = 0; d != num_negative + 1; d++)
+		{
+			if (d == 0) // positive sample
+			{
+				source = u;
+				label = 1;
+			}
+			else // negative samples
+			{
+				source = wd_neg_table[Rand(seed)];
+				label = 0;
+			}
+			lu = source * dim;
+			if (order == 2) Update(&word_emb_vertex[lu], &doc_emb_vertex[lv], vec_error, label);
+		}
+
+		// update target embedding
+		for (int c = 0; c != dim; c++) doc_emb_vertex[c + lv] += vec_error[c];
+
+
+
+
+
+		count++;
+	}
+	free(vec_error);
+	pthread_exit(NULL);
+}
+
+void OutputVector(int type)
+{
+	char *out_file = NULL;
+	int num_vertices;
+	struct ClassVertex *vertex = NULL;
+	real *emb_vertex = NULL;
+
+	if (type == WORD_TYPE) // word
+	{
+		out_file = word_embedding_file;
+		num_vertices = num_word_vertices;
+		vertex = word_vertex;
+		emb_vertex = word_emb_vertex;
+	}
+	else if (type == DOC_TYPE) // doc
+	{
+		out_file = doc_embedding_file;
+		num_vertices = num_doc_vertices;
+		vertex = doc_vertex;
+		emb_vertex = doc_emb_vertex;
+	}
+	else if (type == TOPIC_TYPE) // topic
+	{
+		out_file = topic_embedding_file;
+		num_vertices = n_topics;
+
+	}
+	else
+	{
+		printf("ERROR: unknown output type %d", type);
+		exit(1);
+	}
+
+	FILE *fo = fopen(out_file, "wb");
+	fprintf(fo, "%d %d\n", num_vertices, dim);
+	for (int a = 0; a < num_vertices; a++)
+	{
+		fprintf(fo, "%s ", vertex[a].name);
+		if (is_binary) for (int b = 0; b < dim; b++) fwrite(&emb_vertex[a * dim + b], sizeof(real), 1, fo);
+		else for (int b = 0; b < dim; b++) fprintf(fo, "%lf ", emb_vertex[a * dim + b]);
+		fprintf(fo, "\n");
+	}
+	fclose(fo);
+}
 
 void TrainLINE() {
-	// long a;
-	// pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
+	long a;
+	pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
 
 	if (order != 1 && order != 2)
 	{
@@ -543,15 +622,17 @@ void TrainLINE() {
 	gsl_r = gsl_rng_alloc(gsl_T);
 	gsl_rng_set(gsl_r, 314159265);
 
-	// clock_t start = clock();
-	// printf("--------------------------------\n");
-	// for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainLINEThread, (void *)a);
-	// for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
-	// printf("\n");
-	// clock_t finish = clock();
-	// printf("Total time: %lf\n", (double)(finish - start) / CLOCKS_PER_SEC);
+	num_threads = 1;
+	clock_t start = clock();
+	printf("--------------------------------\n");
+	for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainLINEThread, (void *)a);
+	for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
+	printf("\n");
+	clock_t finish = clock();
+	printf("Total time: %lf\n", (double)(finish - start) / CLOCKS_PER_SEC);
 
-	// Output();
+	OutputVector(0); // word
+	OutputVector(1); // doc
 }
 
 int ArgPos(char *str, int argc, char **argv) {
