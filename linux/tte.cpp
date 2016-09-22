@@ -175,7 +175,7 @@ void ReadData(char *network_file, int type)
 
 	while (fgets(str, sizeof(str), fin)) (*num_edges)++;
 	fclose(fin);
-	printf("Number of edges: %lld          \n\n", *num_edges);
+	// printf("Number of edges: %lld          \n\n", *num_edges);
 
 	edge_source_id = (int *)malloc(*num_edges*sizeof(int));
 	edge_target_id = (int *)malloc(*num_edges*sizeof(int));
