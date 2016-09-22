@@ -382,15 +382,15 @@ void InitNegTable(int type)
 {
 	int num_vertices = 0;
 	struct ClassVertex *vertex;
-	if (type == WW_TYPE) // word-word network
+	if (type == WW_TYPE || type == WD_TYPE) // word-word or word-doc network
 	{
 		num_vertices = num_word_vertices;
 		vertex = word_vertex;
 	}
-	else if (type == WD_TYPE) // word-doc network
+	else
 	{
-		num_vertices = num_word_vertices;
-		vertex = word_vertex;
+		printf("ERROR: unknown output type %d", type);
+		exit(1);
 	}
 
 	double sum = 0, cur_sum = 0, por = 0;
@@ -774,6 +774,24 @@ void TrainLINE() {
 	OutputVector(WORD_TYPE); // word
 	OutputVector(DOC_TYPE); // doc
 	OutputVector(TOPIC_TYPE); // topic
+
+	// free memory
+	free(word_hash_table);
+	free(doc_hash_table);
+	free(ww_edge_source_id);
+	free(ww_edge_target_id);
+	free(ww_edge_weight);
+	free(wd_edge_source_id);
+	free(wd_edge_target_id);
+	free(wd_edge_weight);
+	free(ww_alias);
+	free(ww_prob);
+	free(wd_alias);
+	free(wd_prob);
+	free(ww_neg_table);
+	free(wd_neg_table);
+	free(sigmoid_table);
+	free(pt);
 }
 
 int ArgPos(char *str, int argc, char **argv) {
@@ -831,5 +849,7 @@ int main(int argc, char **argv) {
 	word_vertex = (struct ClassVertex *)calloc(max_num_vertices, sizeof(struct ClassVertex));
 	doc_vertex = (struct ClassVertex *)calloc(max_num_vertices, sizeof(struct ClassVertex));
 	TrainLINE();
+	free(word_vertex);
+	free(doc_vertex);
 	return 0;
 }
