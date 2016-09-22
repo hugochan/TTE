@@ -49,7 +49,7 @@ struct ClassVertex {
 // char network_file[MAX_STRING], embedding_file[MAX_STRING];
 char wwnet_file[MAX_STRING], wdnet_file[MAX_STRING], word_embedding_file[MAX_STRING], doc_embedding_file[MAX_STRING], topic_embedding_file[MAX_STRING];
 struct ClassVertex *word_vertex, *doc_vertex;
-int is_binary = 0, n_topics = 0, num_threads = 1, order = 2, dim = 100, num_negative = 5;
+int is_binary = 0, n_topics = 0, num_threads = 1, dim = 100, num_negative = 5;
 int *word_hash_table, *doc_hash_table, *ww_neg_table, *wd_neg_table;
 int max_num_vertices = 1, num_word_vertices = 0, num_doc_vertices = 0, num_topic_vertices = 0;
 long long total_samples = 1, current_sample_count = 0, num_ww_edges = 0, num_wd_edges = 0;
@@ -715,9 +715,9 @@ void OutputVector(int type)
 	for (int a = 0; a < num_vertices; a++)
 	{
 		if (type == TOPIC_TYPE)
-			fprintf(fo, "topic %d) ", a);
+			fprintf(fo, "topic %d)\n", a);
 		else
-			fprintf(fo, "%s ", vertex[a].name);
+			fprintf(fo, "%s\n", vertex[a].name);
 		if (is_binary) for (int b = 0; b < dim; b++) fwrite(&emb_vertex[a * dim + b], sizeof(real), 1, fo);
 		else for (int b = 0; b < dim; b++) fprintf(fo, "%lf ", emb_vertex[a * dim + b]);
 		fprintf(fo, "\n");
@@ -729,13 +729,7 @@ void TrainLINE() {
 	long a;
 	pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
 
-	if (order != 1 && order != 2)
-	{
-		printf("Error: order should be eighther 1 or 2!\n");
-		exit(1);
-	}
 	printf("--------------------------------\n");
-	printf("Order: %d\n", order);
 	printf("Samples: %lldM\n", total_samples / 1000000);
 	printf("Negative: %d\n", num_negative);
 	printf("Dimension: %d\n", dim);
@@ -751,6 +745,7 @@ void TrainLINE() {
 	ReadData(wdnet_file, 1);
 	printf("Number of words: %d          \n", num_word_vertices);
 	printf("Number of documents: %d          \n", num_doc_vertices);
+	printf("Number of topics: %d          \n", n_topics);
 
 	InitAliasTable(num_ww_edges, ww_edge_weight, 0); // word-word network
 	InitAliasTable(num_wd_edges, wd_edge_weight, 1); // word-doc network
@@ -807,8 +802,6 @@ int main(int argc, char **argv) {
 		printf("\t\tSave the learnt embeddings in binary moded; default is 0 (off)\n");
 		printf("\t-size <int>\n");
 		printf("\t\tSet dimension of vertex embeddings; default is 100\n");
-		printf("\t-order <int>\n");
-		printf("\t\tThe type of the model; 1 for first order, 2 for second order; default is 2\n");
 		printf("\t-negative <int>\n");
 		printf("\t\tNumber of negative examples; default is 5\n");
 		printf("\t-samples <int>\n");
@@ -818,7 +811,7 @@ int main(int argc, char **argv) {
 		printf("\t-rho <float>\n");
 		printf("\t\tSet the starting learning rate; default is 0.025\n");
 		printf("\nExamples:\n");
-		printf("./line -ww word_word_net.txt -wd word_doc_net.txt -out_word word_vec.txt -out_doc doc_vec.txt -out_topic topic_vec.txt -binary 1 -n_topics 20 -size 200 -order 2 -negative 5 -samples 100 -rho 0.025 -threads 20\n\n");
+		printf("./line -ww word_word_net.txt -wd word_doc_net.txt -out_word word_vec.txt -out_doc doc_vec.txt -out_topic topic_vec.txt -binary 1 -n_topics 20 -size 200 -negative 5 -samples 100 -rho 0.025 -threads 20\n\n");
 		return 0;
 	}
 	if ((i = ArgPos((char *)"-ww", argc, argv)) > 0) strcpy(wwnet_file, argv[i + 1]);
@@ -829,7 +822,6 @@ int main(int argc, char **argv) {
 	if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) is_binary = atoi(argv[i + 1]);
 	if ((i = ArgPos((char *)"-n_topics", argc, argv)) > 0) n_topics = atoi(argv[i + 1]);
 	if ((i = ArgPos((char *)"-size", argc, argv)) > 0) dim = atoi(argv[i + 1]);
-	if ((i = ArgPos((char *)"-order", argc, argv)) > 0) order = atoi(argv[i + 1]);
 	if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) num_negative = atoi(argv[i + 1]);
 	if ((i = ArgPos((char *)"-samples", argc, argv)) > 0) total_samples = atoi(argv[i + 1]);
 	if ((i = ArgPos((char *)"-rho", argc, argv)) > 0) init_rho = atof(argv[i + 1]);
