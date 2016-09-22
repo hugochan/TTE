@@ -1,0 +1,1 @@
+./tte -ww ./datasets/word-word.txt -wd ./datasets/word-doc.txt -out_word word_vec.txt  -out_doc doc_vec.txt -out_topic topic_vec.txt -out_dt_dist dt_dist.txt -out_tw_dist tw_dist.txt -binary 0 -n_topics 2 -size 20 -negative 5 -samples  1 -rho 0.025 -threads 1
