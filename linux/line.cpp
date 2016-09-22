@@ -12,7 +12,8 @@ Publication: Jian Tang, Meng Qu, Mingzhe Wang, Ming Zhang, Jun Yan, Qiaozhu Mei.
 // <u> <v> and <w> are seperated by ' ' or '\t' (blank or tab)
 // For UNDIRECTED edge, the user should use two DIRECTED edges to represent it.
 
-
+#include <iostream>
+#include <random>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,6 +65,12 @@ double *ww_prob, *wd_prob;
 
 const gsl_rng_type * gsl_T;
 gsl_rng * gsl_r;
+
+
+// Generate uniform random numbers
+std::random_device                  rand_dev;
+std::mt19937                        generator(rand_dev());
+
 
 /* Build a hash table, mapping each vertex name to a unique vertex id */
 unsigned int Hash(char *key)
@@ -358,10 +365,15 @@ void InitVector(int type, int num_vertices)
 		doc_emb_vertex = emb_vertex;
 		doc_emb_context = emb_context;
 	}
-	else // topic
+	else if (type == TOPIC_TYPE) // topic
 	{
 		topic_emb_vertex = emb_vertex;
 		topic_emb_context = emb_context;
+	}
+	else
+	{
+		printf("ERROR: unknown output type %d", type);
+		exit(1);
 	}
 }
 
@@ -422,6 +434,14 @@ real FastSigmoid(real x)
 	return sigmoid_table[k];
 }
 
+/* Compute dot product.*/
+real dot(real *vec_u, real *vec_v, int size)
+{
+	real x = 0;
+	for (int c = 0; c != size; c++) x += vec_u[c] * vec_v[c];
+	return x;
+}
+
 /* Fastly generate a random integer */
 int Rand(unsigned long long &seed)
 {
@@ -429,16 +449,58 @@ int Rand(unsigned long long &seed)
 	return (seed >> 16) % neg_table_size;
 }
 
-/* Update embeddings
+/* Update embeddings in word-word and word-doc networks.
 vec_u and vec_v are source and target embeddings, respectively.
 */
 void Update(real *vec_u, real *vec_v, real *vec_error, int label)
 {
-	real x = 0, g;
-	for (int c = 0; c != dim; c++) x += vec_u[c] * vec_v[c];
+	real x, g;
+	x = dot(vec_u, vec_v, dim);
 	g = (label - FastSigmoid(x)) * rho;
 	for (int c = 0; c != dim; c++) vec_error[c] += g * vec_u[c]; // vec_error is used to update target embeddings
 	for (int c = 0; c != dim; c++) vec_u[c] += g * vec_v[c];
+}
+
+/* Update embeddings in word-topic and topic-doc networks.
+vec_u and vec_v are source and target embeddings, respectively.
+*/
+void Update2(real *vec_u, real *vec_v, real *vec_error, int label, real part_grad)
+{
+	real x, g;
+	x = dot(vec_u, vec_v, dim);
+	g = part_grad * (label - FastSigmoid(x)) * rho;
+	for (int c = 0; c != dim; c++) vec_error[c] += g * vec_u[c]; // vec_error is used to update target embeddings
+	for (int c = 0; c != dim; c++) vec_u[c] += g * vec_v[c];
+}
+
+/* Compute -p(u/v) * [log p(u/v) +1]
+which is part of the gradient for word-topic and topic-doc networks
+*/
+real calc_part_grad(long long target_vertex, long long *sample_list, real *source_emb_vertex, real *target_emb_vertex)
+{
+	long long u, v = target_vertex, lu, lv;
+	int d;
+	real x, log_pr = 0;
+
+	lv = v * dim;
+	// compute log p(u/v) using the negative sampling equation
+	for (d = 0; d != num_negative + 1; d++)
+	{
+		u = sample_list[d];
+		lu = u * dim;
+
+		if (d == 0) // positive sample
+		{
+			x = dot(&source_emb_vertex[lu], &target_emb_vertex[lv], dim);
+			log_pr += logl((double)FastSigmoid(x));
+		}
+		else // negative sample
+		{
+			x = dot(&source_emb_vertex[lu], &target_emb_vertex[lv], dim);
+			log_pr += logl((double)FastSigmoid(-x));
+		}
+	}
+	return -exp(log_pr) * (log_pr + 1);
 }
 
 void *TrainLINEThread(void *id)
@@ -448,6 +510,8 @@ void *TrainLINEThread(void *id)
 	unsigned long long seed = (long long)id;
 	real *vec_error = (real *)calloc(dim, sizeof(real));
 	// real *emb_vertex, *emb_context;
+	long long *sample_list = (long long *)calloc(num_negative+1, sizeof(long long));
+	real part_grad;
 
 	while (1)
 	{
@@ -489,7 +553,7 @@ void *TrainLINEThread(void *id)
 				label = 0;
 			}
 			lu = source * dim;
-			if (order == 2) Update(&word_emb_vertex[lu], &word_emb_vertex[lv], vec_error, label);
+			Update(&word_emb_vertex[lu], &word_emb_vertex[lv], vec_error, label);
 		}
 
 		// update target embedding
@@ -519,19 +583,97 @@ void *TrainLINEThread(void *id)
 				label = 0;
 			}
 			lu = source * dim;
-			if (order == 2) Update(&word_emb_vertex[lu], &doc_emb_vertex[lv], vec_error, label);
+			Update(&word_emb_vertex[lu], &doc_emb_vertex[lv], vec_error, label);
 		}
 
 		// update target embedding
 		for (int c = 0; c != dim; c++) doc_emb_vertex[c + lv] += vec_error[c];
 
 
+		// 3) sample a pair of word-topic and draw num_negative "negative" pairs
+		std::uniform_int_distribution<int>  topic_distr(0, n_topics-1);
+		std::uniform_int_distribution<int>  word_distr(0, num_word_vertices-1);
 
+		u = word_distr(generator);
+		v = topic_distr(generator);
+
+		lv = v * dim;
+		for (int c = 0; c != dim; c++) vec_error[c] = 0;
+		for (int d = 0; d != num_negative + 1; d++) sample_list[d] = -1;
+
+		// NEGATIVE SAMPLING
+		for (int d = 0; d != num_negative + 1; d++)
+		{
+			if (d == 0) // positive sample
+			{
+				sample_list[d] = u;
+			}
+			else // negative samples
+			{
+				sample_list[d] = word_distr(generator); // uniformly samples a negative edge
+			}
+		}
+
+		part_grad = calc_part_grad(v, sample_list, word_emb_vertex, topic_emb_vertex);
+
+		for (int d = 0; d != num_negative + 1; d++)
+		{
+			source = sample_list[d];
+			label = (d == 0)? 1:0;
+			lu = source * dim;
+
+			Update2(&word_emb_vertex[lu], &topic_emb_vertex[lv], vec_error, label, part_grad);
+		}
+
+		// update target embedding
+		for (int c = 0; c != dim; c++) topic_emb_vertex[c + lv] += vec_error[c];
+
+
+
+
+
+		// 4) sample a pair of topic-doc and draw num_negative "negative" pairs
+		std::uniform_int_distribution<int>  doc_distr(0, num_doc_vertices-1);
+
+		u = topic_distr(generator);
+		v = doc_distr(generator);
+
+		lv = v * dim;
+		for (int c = 0; c != dim; c++) vec_error[c] = 0;
+		for (int d = 0; d != num_negative + 1; d++) sample_list[d] = -1;
+
+		// NEGATIVE SAMPLING
+		for (int d = 0; d != num_negative + 1; d++)
+		{
+			if (d == 0) // positive sample
+			{
+				sample_list[d] = u;
+			}
+			else // negative samples
+			{
+				sample_list[d] = topic_distr(generator); // uniformly samples a negative edge
+			}
+		}
+
+		part_grad = calc_part_grad(v, sample_list, topic_emb_vertex, doc_emb_vertex);
+
+		for (int d = 0; d != num_negative + 1; d++)
+		{
+			source = sample_list[d];
+			label = (d == 0)? 1:0;
+			lu = source * dim;
+
+			Update2(&topic_emb_vertex[lu], &doc_emb_vertex[lv], vec_error, label, part_grad);
+		}
+
+		// update target embedding
+		for (int c = 0; c != dim; c++) doc_emb_vertex[c + lv] += vec_error[c];
 
 
 		count++;
 	}
 	free(vec_error);
+	free(sample_list);
 	pthread_exit(NULL);
 }
 
@@ -560,7 +702,7 @@ void OutputVector(int type)
 	{
 		out_file = topic_embedding_file;
 		num_vertices = n_topics;
-
+		emb_vertex = topic_emb_vertex;
 	}
 	else
 	{
@@ -569,10 +711,13 @@ void OutputVector(int type)
 	}
 
 	FILE *fo = fopen(out_file, "wb");
-	fprintf(fo, "%d %d\n", num_vertices, dim);
+	fprintf(fo, "#%d %d-D\n", num_vertices, dim);
 	for (int a = 0; a < num_vertices; a++)
 	{
-		fprintf(fo, "%s ", vertex[a].name);
+		if (type == TOPIC_TYPE)
+			fprintf(fo, "topic %d) ", a);
+		else
+			fprintf(fo, "%s ", vertex[a].name);
 		if (is_binary) for (int b = 0; b < dim; b++) fwrite(&emb_vertex[a * dim + b], sizeof(real), 1, fo);
 		else for (int b = 0; b < dim; b++) fprintf(fo, "%lf ", emb_vertex[a * dim + b]);
 		fprintf(fo, "\n");
@@ -609,12 +754,12 @@ void TrainLINE() {
 
 	InitAliasTable(num_ww_edges, ww_edge_weight, 0); // word-word network
 	InitAliasTable(num_wd_edges, wd_edge_weight, 1); // word-doc network
-	InitVector(0, num_word_vertices); // word
-	InitVector(1, num_doc_vertices); // doc
-	InitVector(2, n_topics); // topic
+	InitVector(WORD_TYPE, num_word_vertices); // word
+	InitVector(DOC_TYPE, num_doc_vertices); // doc
+	InitVector(TOPIC_TYPE, n_topics); // topic
 
-	InitNegTable(0); // word-word network
-	InitNegTable(1); // word-doc network
+	InitNegTable(WW_TYPE); // word-word network
+	InitNegTable(WD_TYPE); // word-doc network
 	InitSigmoidTable();
 
 	gsl_rng_env_setup();
@@ -631,8 +776,9 @@ void TrainLINE() {
 	clock_t finish = clock();
 	printf("Total time: %lf\n", (double)(finish - start) / CLOCKS_PER_SEC);
 
-	OutputVector(0); // word
-	OutputVector(1); // doc
+	OutputVector(WORD_TYPE); // word
+	OutputVector(DOC_TYPE); // doc
+	OutputVector(TOPIC_TYPE); // topic
 }
 
 int ArgPos(char *str, int argc, char **argv) {
