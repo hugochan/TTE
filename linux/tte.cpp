@@ -25,11 +25,13 @@ Created on Sep, 2016
 #define MAX_STRING 100
 #define SIGMOID_BOUND 6
 #define NEG_SAMPLING_POWER 0.75
-#define WW_TYPE 0
-#define WD_TYPE 1
-#define WORD_TYPE 0
-#define DOC_TYPE 1
-#define TOPIC_TYPE 2
+#define WW_TYPE 0 // word-word
+#define WD_TYPE 1 // word-doc
+#define DT_TYPE 2 // doc-topic
+#define TW_TYPE 3 // topic-word
+#define WORD_TYPE 0 // word
+#define DOC_TYPE 1 // doc
+#define TOPIC_TYPE 2 // topic
 
 const int hash_table_size = 30000000;
 const int neg_table_size = 1e8;
@@ -47,7 +49,7 @@ struct ClassVertex {
 
 
 // char network_file[MAX_STRING], embedding_file[MAX_STRING];
-char wwnet_file[MAX_STRING], wdnet_file[MAX_STRING], word_embedding_file[MAX_STRING], doc_embedding_file[MAX_STRING], topic_embedding_file[MAX_STRING];
+char wwnet_file[MAX_STRING], wdnet_file[MAX_STRING], word_embedding_file[MAX_STRING], doc_embedding_file[MAX_STRING], topic_embedding_file[MAX_STRING], doc_topic_dist_file[MAX_STRING], topic_word_dist_file[MAX_STRING];
 struct ClassVertex *word_vertex, *doc_vertex;
 int is_binary = 0, n_topics = 0, num_threads = 1, dim = 100, num_negative = 5;
 int *word_hash_table, *doc_hash_table, *ww_neg_table, *wd_neg_table;
@@ -55,9 +57,10 @@ int max_num_vertices = 1, num_word_vertices = 0, num_doc_vertices = 0, num_topic
 long long total_samples = 1, current_sample_count = 0, num_ww_edges = 0, num_wd_edges = 0;
 real init_rho = 0.025, rho;
 real *word_emb_vertex, *word_emb_context, *doc_emb_vertex, *doc_emb_context, *topic_emb_vertex, *topic_emb_context, *sigmoid_table;
-
+real **doc_topic_dist, **topic_word_dist;
 int *ww_edge_source_id, *ww_edge_target_id, *wd_edge_source_id, *wd_edge_target_id;
 double *ww_edge_weight, *wd_edge_weight;
+
 
 // Parameters for edge sampling
 long long *ww_alias, *wd_alias;
@@ -377,6 +380,26 @@ void InitVector(int type, int num_vertices)
 	}
 }
 
+real **InitCondDist(int source_num_vertices, int target_num_vertices)
+{
+	real **cond_dist = (real **)calloc(target_num_vertices, sizeof(real *));
+	if (cond_dist == NULL)
+	{
+		printf("Error: memory allocation failed!\n");
+		exit(1);
+	}
+	for (int i = 0; i != target_num_vertices; i++)
+	{
+		cond_dist[i] = (real *)calloc(source_num_vertices, sizeof(real));
+		if (cond_dist[i] == NULL)
+		{
+			printf("Error: memory allocation failed!\n");
+			exit(1);
+		}
+	}
+	return cond_dist;
+}
+
 /* Sample negative vertex samples according to vertex degrees */
 void InitNegTable(int type)
 {
@@ -476,7 +499,7 @@ void Update2(real *vec_u, real *vec_v, real *vec_error, int label, real part_gra
 /* Compute -p(u/v) * [log p(u/v) +1]
 which is part of the gradient for word-topic and topic-doc networks
 */
-real calc_part_grad(long long target_vertex, long long *sample_list, real *source_emb_vertex, real *target_emb_vertex)
+real CalcPartGrad(long long target_vertex, long long *sample_list, real *source_emb_vertex, real *target_emb_vertex)
 {
 	long long u, v = target_vertex, lu, lv;
 	int d;
@@ -502,6 +525,38 @@ real calc_part_grad(long long target_vertex, long long *sample_list, real *sourc
 	}
 	return -exp(log_pr) * (log_pr + 1);
 }
+
+
+/* Compute conditional distribution using the original softmax function*/
+void CalcCondDist(real **cond_dist, real *source_emb_vertex, real *target_emb_vertex, int source_num_vertices, int target_num_vertices, int start_idx, int end_idx)
+{
+	int i, j;
+	long long lu, lv;
+	real sum;
+
+	for (j = start_idx; j != end_idx; j++)
+	{
+		lv = j * dim;
+		sum = 0;
+		for (i = 0; i != source_num_vertices; i++)
+		{
+			lu = i * dim;
+			cond_dist[j][i] = exp(dot(&source_emb_vertex[lu], &target_emb_vertex[lv], dim));
+			sum += cond_dist[j][i];
+		}
+		// normalization
+		for (i = 0; i != source_num_vertices; i++)
+		{
+			cond_dist[j][i] /= sum;
+		}
+	}
+}
+
+/* Approximate conditional distribution using negative sampling*/
+void ApproxCondDist(real *source_emb_vertex, real *target_emb_vertex)
+{
+}
+
 
 void *TrainLINEThread(void *id)
 {
@@ -614,7 +669,7 @@ void *TrainLINEThread(void *id)
 			}
 		}
 
-		part_grad = calc_part_grad(v, sample_list, word_emb_vertex, topic_emb_vertex);
+		part_grad = CalcPartGrad(v, sample_list, word_emb_vertex, topic_emb_vertex);
 
 		for (int d = 0; d != num_negative + 1; d++)
 		{
@@ -655,7 +710,7 @@ void *TrainLINEThread(void *id)
 			}
 		}
 
-		part_grad = calc_part_grad(v, sample_list, topic_emb_vertex, doc_emb_vertex);
+		part_grad = CalcPartGrad(v, sample_list, topic_emb_vertex, doc_emb_vertex);
 
 		for (int d = 0; d != num_negative + 1; d++)
 		{
@@ -725,6 +780,50 @@ void OutputVector(int type)
 	fclose(fo);
 }
 
+/* Output doc-topic and topic-word distributions*/
+void OutputCondDist(int type)
+{
+	char *out_file = NULL;
+	int source_num_vertices, target_num_vertices;
+	real **cond_dist = NULL;
+	struct ClassVertex *vertex = NULL;
+
+	if (type == DT_TYPE) // doc-topic
+	{
+		out_file = doc_topic_dist_file;
+		source_num_vertices = n_topics;
+		target_num_vertices = num_doc_vertices;
+		cond_dist = doc_topic_dist;
+		vertex = doc_vertex;
+	}
+	else if (type == TW_TYPE) // topic-word
+	{
+		out_file = topic_word_dist_file;
+		source_num_vertices = num_word_vertices;
+		target_num_vertices = n_topics;
+		cond_dist = topic_word_dist;
+	}
+	else
+	{
+		printf("ERROR: unknown output type %d", type);
+		exit(1);
+	}
+
+	FILE *fo = fopen(out_file, "wb");
+	fprintf(fo, "#%d %d-D\n", target_num_vertices, source_num_vertices);
+	for (int a = 0; a < target_num_vertices; a++)
+	{
+		if (type == DT_TYPE)
+			fprintf(fo, "%s\n", vertex[a].name);
+		else
+			fprintf(fo, "topic %d)\n", a);
+		if (is_binary) for (int b = 0; b < source_num_vertices; b++) fwrite(&cond_dist[a][b], sizeof(real), 1, fo);
+		else for (int b = 0; b < source_num_vertices; b++) fprintf(fo, "%lf ", cond_dist[a][b]);
+		fprintf(fo, "\n");
+	}
+	fclose(fo);
+}
+
 void TrainLINE() {
 	long a;
 	pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
@@ -775,6 +874,17 @@ void TrainLINE() {
 	OutputVector(DOC_TYPE); // doc
 	OutputVector(TOPIC_TYPE); // topic
 
+
+	// Compute doc-topic and topic-word distributions
+	doc_topic_dist = InitCondDist(n_topics, num_doc_vertices);
+	topic_word_dist = InitCondDist(num_word_vertices, n_topics);
+	CalcCondDist(doc_topic_dist, topic_emb_vertex, doc_emb_vertex, n_topics, num_doc_vertices, 0, num_doc_vertices);
+	CalcCondDist(topic_word_dist, word_emb_vertex, topic_emb_vertex, num_word_vertices, n_topics, 0, n_topics);
+
+	OutputCondDist(DT_TYPE); // doc-topic
+	OutputCondDist(TW_TYPE); // topic-word
+
+
 	// free memory
 	free(word_hash_table);
 	free(doc_hash_table);
@@ -791,6 +901,8 @@ void TrainLINE() {
 	free(ww_neg_table);
 	free(wd_neg_table);
 	free(sigmoid_table);
+	free(doc_topic_dist);
+	free(topic_word_dist);
 	free(pt);
 }
 
@@ -837,6 +949,8 @@ int main(int argc, char **argv) {
 	if ((i = ArgPos((char *)"-out_word", argc, argv)) > 0) strcpy(word_embedding_file, argv[i + 1]);
 	if ((i = ArgPos((char *)"-out_doc", argc, argv)) > 0) strcpy(doc_embedding_file, argv[i + 1]);
 	if ((i = ArgPos((char *)"-out_topic", argc, argv)) > 0) strcpy(topic_embedding_file, argv[i + 1]);
+	if ((i = ArgPos((char *)"-out_dt_dist", argc, argv)) > 0) strcpy(doc_topic_dist_file, argv[i + 1]);
+	if ((i = ArgPos((char *)"-out_tw_dist", argc, argv)) > 0) strcpy(topic_word_dist_file, argv[i + 1]);
 	if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) is_binary = atoi(argv[i + 1]);
 	if ((i = ArgPos((char *)"-n_topics", argc, argv)) > 0) n_topics = atoi(argv[i + 1]);
 	if ((i = ArgPos((char *)"-size", argc, argv)) > 0) dim = atoi(argv[i + 1]);
