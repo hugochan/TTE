@@ -23,7 +23,7 @@ Created on Sep, 2016
 
 
 #define MAX_STRING 100
-#define SIGMOID_BOUND 6
+#define SIGMOID_BOUND 12
 #define NEG_SAMPLING_POWER 0.75
 #define WW_TYPE 0 // word-word
 #define WD_TYPE 1 // word-doc
@@ -35,10 +35,10 @@ Created on Sep, 2016
 
 const int hash_table_size = 30000000;
 const int neg_table_size = 1e8;
-const int sigmoid_table_size = 1000;
+const int sigmoid_table_size = 100000;
 
 
-typedef float real;                    // Precision of float numbers
+typedef double real;                    // Precision of float numbers
 
 struct ClassVertex {
 	// double ww_degree; // if word vertex, word-word net out-degree; else, reserved
@@ -516,14 +516,18 @@ real CalcPartGrad(long long target_vertex, long long *sample_list, real *source_
 		{
 			x = dot(&source_emb_vertex[lu], &target_emb_vertex[lv], dim);
 			log_pr += logl((double)FastSigmoid(x));
+			// printf("\n%LF    %f    %f", logl((double)FastSigmoid(x)), (double)FastSigmoid(x), x);
 		}
 		else // negative sample
 		{
 			x = dot(&source_emb_vertex[lu], &target_emb_vertex[lv], dim);
 			log_pr += logl((double)FastSigmoid(-x));
+			// printf("\n%LF    %f    %f", logl((double)FastSigmoid(-x)), (double)FastSigmoid(-x), -x);
 		}
 	}
-	return -exp(log_pr) * (log_pr + 1);
+
+	x = -exp(log_pr) * (log_pr + 1);
+	return std::isnan(x)? 0 : x;
 }
 
 
