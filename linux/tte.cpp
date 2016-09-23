@@ -22,7 +22,7 @@ Created on Sep, 2016
 #include <gsl/gsl_rng.h>
 
 
-#define MAX_STRING 100
+#define MAX_STRING 200
 #define SIGMOID_BOUND 12
 #define NEG_SAMPLING_POWER 0.75
 #define WW_TYPE 0 // word-word
@@ -444,7 +444,7 @@ void InitSigmoidTable()
 	sigmoid_table = (real *)malloc((sigmoid_table_size + 1) * sizeof(real));
 	for (int k = 0; k != sigmoid_table_size; k++)
 	{
-		x = 2 * SIGMOID_BOUND * k / sigmoid_table_size - SIGMOID_BOUND;
+		x = 2.0 * SIGMOID_BOUND * k / sigmoid_table_size - SIGMOID_BOUND;
 		sigmoid_table[k] = 1 / (1 + exp(-x));
 	}
 }
@@ -496,7 +496,7 @@ void Update2(real *vec_u, real *vec_v, real *vec_error, int label, real part_gra
 	for (int c = 0; c != dim; c++) vec_u[c] += g * vec_v[c];
 }
 
-/* Compute -p(u/v) * [log p(u/v) +1]
+/* Compute p(u/v) * [log p(u/v) +1]
 which is part of the gradient for word-topic and topic-doc networks
 */
 real CalcPartGrad(long long target_vertex, long long *sample_list, real *source_emb_vertex, real *target_emb_vertex)
@@ -524,9 +524,15 @@ real CalcPartGrad(long long target_vertex, long long *sample_list, real *source_
 			log_pr += logl((double)FastSigmoid(-x));
 			// printf("\n%LF    %f    %f", logl((double)FastSigmoid(-x)), (double)FastSigmoid(-x), -x);
 		}
+		if (std::isnan(x))
+		{
+			printf("\n%f", x);
+			x = x;
+
+		}
 	}
 
-	x = -exp(log_pr) * (log_pr + 1);
+	x = exp(log_pr) * (log_pr + 1);
 	return std::isnan(x)? 0 : x;
 }
 
@@ -614,10 +620,8 @@ void *TrainLINEThread(void *id)
 			lu = source * dim;
 			Update(&word_emb_vertex[lu], &word_emb_vertex[lv], vec_error, label);
 		}
-
 		// update target embedding
 		for (int c = 0; c != dim; c++) word_emb_vertex[c + lv] += vec_error[c];
-
 
 
 		// 2) sample an edge from Ewd and draw num_negative negative edges
@@ -644,7 +648,6 @@ void *TrainLINEThread(void *id)
 			lu = source * dim;
 			Update(&word_emb_vertex[lu], &doc_emb_vertex[lv], vec_error, label);
 		}
-
 		// update target embedding
 		for (int c = 0; c != dim; c++) doc_emb_vertex[c + lv] += vec_error[c];
 
@@ -683,12 +686,8 @@ void *TrainLINEThread(void *id)
 
 			Update2(&word_emb_vertex[lu], &topic_emb_vertex[lv], vec_error, label, part_grad);
 		}
-
 		// update target embedding
 		for (int c = 0; c != dim; c++) topic_emb_vertex[c + lv] += vec_error[c];
-
-
-
 
 
 		// 4) sample a pair of topic-doc and draw num_negative "negative" pairs
@@ -724,10 +723,8 @@ void *TrainLINEThread(void *id)
 
 			Update2(&topic_emb_vertex[lu], &doc_emb_vertex[lv], vec_error, label, part_grad);
 		}
-
 		// update target embedding
 		for (int c = 0; c != dim; c++) doc_emb_vertex[c + lv] += vec_error[c];
-
 
 		count++;
 	}
@@ -878,7 +875,6 @@ void TrainLINE() {
 	OutputVector(DOC_TYPE); // doc
 	OutputVector(TOPIC_TYPE); // topic
 
-
 	// Compute doc-topic and topic-word distributions
 	doc_topic_dist = InitCondDist(n_topics, num_doc_vertices);
 	topic_word_dist = InitCondDist(num_word_vertices, n_topics);
@@ -887,7 +883,6 @@ void TrainLINE() {
 
 	OutputCondDist(DT_TYPE); // doc-topic
 	OutputCondDist(TW_TYPE); // topic-word
-
 
 	// free memory
 	free(word_hash_table);
