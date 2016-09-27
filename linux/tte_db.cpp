@@ -55,7 +55,7 @@ int is_binary = 0, n_topics = 0, num_threads = 1, dim = 100, num_negative = 5;
 int *word_hash_table, *doc_hash_table, *ww_neg_table, *wd_neg_table;
 int max_num_vertices = 1000, num_word_vertices = 0, num_doc_vertices = 0, num_topic_vertices = 0;
 long long total_samples = 1, current_sample_count = 0, num_ww_edges = 0, num_wd_edges = 0;
-real init_rho = 0.025, rho;
+real init_rho = 0.025, rho, epsilon = 1e-3;
 real *word_emb_vertex, *doc_emb_vertex, *topic_emb_vertex, *sigmoid_table;
 real *word_emb_context, *doc_emb_context, *topic_emb_context;
 real **doc_topic_dist, **topic_word_dist;
@@ -380,7 +380,7 @@ long long SampleAnEdge(double rand_value1, double rand_value2, int type)
 }
 
 /* Initialize the vertex embedding and the context embedding */
-void InitVector(int type, int num_vertices)
+real *InitVector(int num_vertices)
 {
     long long a, b;
     real *emb_vertex = nullptr;
@@ -404,27 +404,7 @@ void InitVector(int type, int num_vertices)
     //        printf("%f\n", emb_vertex[a]);
     //        fflush(stdout);
     //    }
-
-    if (type == WORD_TYPE) // word
-    {
-        word_emb_vertex = emb_vertex;
-        // word_emb_context = emb_context;
-    }
-    else if (type == DOC_TYPE) // doc
-    {
-        doc_emb_vertex = emb_vertex;
-        // doc_emb_context = emb_context;
-    }
-    else if (type == TOPIC_TYPE) // topic
-    {
-        topic_emb_vertex = emb_vertex;
-        // topic_emb_context = emb_context;
-    }
-    else
-    {
-        printf("ERROR: unknown output type %d", type);
-        exit(1);
-    }
+    return emb_vertex;
 }
 
 real **InitCondDist(int source_num_vertices, int target_num_vertices)
@@ -526,12 +506,12 @@ real dot(real *vec_u, real *vec_v, int size)
     return x;
 }
 
-/* Compute distance between two vectors*/
-real dist_vec(real *vec_u, real *vec_v, int size)
+/* Compute distance between two embeddings*/
+real dist_emb(real *vec_u, real *vec_v, int num_vertices)
 {
     real x = 0;
-    for (int c = 0; c != size; c++) x += pow((vec_u[c] - vec_v[c]), 2);
-    return sqrt(x);
+    for (int c = 0; c != num_vertices * dim; c++) x += pow((vec_u[c] - vec_v[c]), 2);
+    return x / num_vertices / dim;
 }
 
 /* Fastly generate a random integer */
@@ -652,6 +632,10 @@ void *TrainLINEThread(void *id)
     // real *emb_vertex, *emb_context;
     long long *sample_list = (long long *)calloc(num_negative+1, sizeof(long long));
     real part_grad;
+    real *pre_word_emb = InitVector(num_word_vertices); // word
+    real *pre_doc_emb = InitVector(num_doc_vertices); // doc
+    real *pre_topic_emb = InitVector(n_topics); // topic
+    real word_diff, doc_diff, topic_diff;
 
     while (1)
     {
@@ -659,6 +643,14 @@ void *TrainLINEThread(void *id)
         if (count > total_samples / num_threads + 2)
         {
             // TODO: check convergence
+            word_diff = dist_emb(word_emb_vertex, pre_word_emb, num_word_vertices);
+            doc_diff = dist_emb(doc_emb_vertex, pre_doc_emb, num_doc_vertices);
+            topic_diff = dist_emb(topic_emb_vertex, pre_topic_emb, n_topics);
+            if (word_diff <= epsilon && doc_diff <= epsilon && topic_diff <= epsilon)
+                printf("\nconverged");
+            else
+                printf("\nnot converged: word_diff    %f, doc_diff    %f, topic_diff  %f", word_diff, doc_diff, topic_diff);
+
             break;
         }
 
@@ -922,9 +914,9 @@ void TrainLINE() {
 
     InitAliasTable(num_ww_edges, ww_edge_weight, 0); // word-word network
     InitAliasTable(num_wd_edges, wd_edge_weight, 1); // word-doc network
-    InitVector(WORD_TYPE, num_word_vertices); // word
-    InitVector(DOC_TYPE, num_doc_vertices); // doc
-    InitVector(TOPIC_TYPE, n_topics); // topic
+    word_emb_vertex = InitVector(num_word_vertices); // word
+    doc_emb_vertex = InitVector(num_doc_vertices); // doc
+    topic_emb_vertex = InitVector(n_topics); // topic
 
     InitNegTable(WW_TYPE); // word-word network
     InitNegTable(WD_TYPE); // word-doc network
@@ -949,18 +941,36 @@ void TrainLINE() {
     OutputVector(doc_embedding_file, doc_emb_vertex, num_doc_vertices, DOC_TYPE);
     OutputVector(topic_embedding_file, topic_emb_vertex, n_topics, TOPIC_TYPE);
 
-    // printf("start to print out0\n");
+    //printf("start to print out0\n");
     // Compute doc-topic and topic-word distributions
     doc_topic_dist = InitCondDist(n_topics, num_doc_vertices);
     topic_word_dist = InitCondDist(num_word_vertices, n_topics);
-    // printf("start to print out1\n");
+    //printf("start to print out1\n");
 
     CalcCondDist(doc_topic_dist, topic_emb_vertex, doc_emb_vertex, n_topics, num_doc_vertices, 0, num_doc_vertices);
     CalcCondDist(topic_word_dist, word_emb_vertex, topic_emb_vertex, num_word_vertices, n_topics, 0, n_topics);
-    // printf("start to print out2\n");
+    //printf("start to print out2\n");
 
     OutputCondDist(doc_topic_dist_file, doc_topic_dist, n_topics, num_doc_vertices, DT_TYPE); // doc-topic
-    OutputCondDist(topic_word_dist_file, topic_word_dist, num_word_vertices, n_topics, TW_TYPE); // topic-word
+    OutputCondDist(topic_word_dist_file, topic_word_dist, num_word_vertices, n_topics, DT_TYPE); // topic-word
+    // test
+    // printf("start to print out2\n");
+    // for (int i = 0; i < n_topics; i++)
+    // {
+    //  for (int j = 0; j < num_word_vertices; j++)
+    //      try{
+    //          printf("%f ", topic_word_dist[i][j]);
+    //      } catch (const std::exception& e){
+    //              std::cout << e.what();
+    //              printf("print error");
+    //              printf("\n");
+    //          }
+
+    //  printf("\n");
+    // }
+
+
+
 
     // free memory
     free(word_emb_vertex);
@@ -1046,5 +1056,7 @@ int main(int argc, char **argv) {
     TrainLINE();
     FreeVertex(word_vertex, num_word_vertices);
     FreeVertex(doc_vertex, num_doc_vertices);
+    // free(word_vertex);
+    // free(doc_vertex);
     return 0;
 }
