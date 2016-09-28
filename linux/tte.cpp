@@ -51,11 +51,11 @@ struct ClassVertex {
 char wwnet_file[MAX_STRING], wdnet_file[MAX_STRING], word_embedding_file[MAX_STRING], doc_embedding_file[MAX_STRING], topic_embedding_file[MAX_STRING], doc_topic_dist_file[MAX_STRING], topic_word_dist_file[MAX_STRING],
     readable_doc_topic_dist_file[MAX_STRING], readable_topic_word_dist_file[MAX_STRING];
 struct ClassVertex *word_vertex, *doc_vertex;
-int is_binary = 0, n_topics = 0, num_threads = 1, dim = 100, num_negative = 5;
+int is_binary = 0, n_topics = 0, num_threads = 1, dim = 100, num_negative = 5, n_top = 5;
 int *word_hash_table, *doc_hash_table, *ww_neg_table, *wd_neg_table;
 int max_num_vertices = 1000, num_word_vertices = 0, num_doc_vertices = 0, num_topic_vertices = 0;
 long long total_samples = 1, current_sample_count = 0, num_ww_edges = 0, num_wd_edges = 0;
-real init_rho = 0.025, rho, epsilon = 5;
+real init_rho = 0.025, rho, epsilon = 3.0;
 real *word_emb_vertex, *doc_emb_vertex, *topic_emb_vertex, *sigmoid_table;
 real *word_emb_context, *doc_emb_context, *topic_emb_context;
 real **doc_topic_dist, **topic_word_dist;
@@ -1015,8 +1015,8 @@ void TrainLINE() {
     OutputCondDist(topic_word_dist_file, topic_word_dist, num_word_vertices, n_topics, DT_TYPE); // topic-word
 
     /* Output readable doc-topic and topic-word distributions */
-    OutputReadableCondDist(readable_doc_topic_dist_file, doc_topic_dist, n_topics, num_doc_vertices, min(5, n_topics), DT_TYPE);
-    OutputReadableCondDist(readable_topic_word_dist_file, topic_word_dist, num_word_vertices, n_topics, min(5, num_word_vertices), TW_TYPE);
+    OutputReadableCondDist(readable_doc_topic_dist_file, doc_topic_dist, n_topics, num_doc_vertices, min(n_top, n_topics), DT_TYPE);
+    OutputReadableCondDist(readable_topic_word_dist_file, topic_word_dist, num_word_vertices, n_topics, min(n_top, num_word_vertices), TW_TYPE);
 
 
     // free memory
@@ -1058,7 +1058,7 @@ int ArgPos(char *str, int argc, char **argv) {
 int main(int argc, char **argv) {
     int i;
     if (argc == 1) {
-        printf("LINE: Large Information Network Embedding\n\n");
+        printf("TTE: Large Information Network Embedding\n\n");
         printf("Options:\n");
         printf("Parameters for training:\n");
         printf("\t-train <file>\n");
@@ -1078,7 +1078,7 @@ int main(int argc, char **argv) {
         printf("\t-rho <float>\n");
         printf("\t\tSet the starting learning rate; default is 0.025\n");
         printf("\nExamples:\n");
-        printf("./line -ww word_word_net.txt -wd word_doc_net.txt -out_word word_vec.txt -out_doc doc_vec.txt -out_topic topic_vec.txt -binary 1 -n_topics 20 -size 200 -negative 5 -samples 100 -rho 0.025 -threads 20\n\n");
+        printf("./line -ww word_word_net.txt -wd word_doc_net.txt -out_word word_vec.txt -out_doc doc_vec.txt -out_topic topic_vec.txt -out_dt_dist dt_dist.txt -out_tw_dist tw_dist.txt -out_rdt_dist readable_dt_dist.txt -out_rtw_dist readable_tw_dist.txt -n_top 5 -binary 1 -n_topics 20 -size 200 -negative 5 -samples 100 -rho 0.025 -epsilon 3.0 -threads 20\n\n");
         return 0;
     }
     if ((i = ArgPos((char *)"-ww", argc, argv)) > 0) strcpy(wwnet_file, argv[i + 1]);
@@ -1090,12 +1090,14 @@ int main(int argc, char **argv) {
     if ((i = ArgPos((char *)"-out_tw_dist", argc, argv)) > 0) strcpy(topic_word_dist_file, argv[i + 1]);
     if ((i = ArgPos((char *)"-out_rdt_dist", argc, argv)) > 0) strcpy(readable_doc_topic_dist_file, argv[i + 1]);
     if ((i = ArgPos((char *)"-out_rtw_dist", argc, argv)) > 0) strcpy(readable_topic_word_dist_file, argv[i + 1]);
+    if ((i = ArgPos((char *)"-n_top", argc, argv)) > 0) n_top = atoi(argv[i + 1]);
     if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) is_binary = atoi(argv[i + 1]);
     if ((i = ArgPos((char *)"-n_topics", argc, argv)) > 0) n_topics = atoi(argv[i + 1]);
     if ((i = ArgPos((char *)"-size", argc, argv)) > 0) dim = atoi(argv[i + 1]);
     if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) num_negative = atoi(argv[i + 1]);
     if ((i = ArgPos((char *)"-samples", argc, argv)) > 0) total_samples = atoi(argv[i + 1]);
     if ((i = ArgPos((char *)"-rho", argc, argv)) > 0) init_rho = atof(argv[i + 1]);
+    if ((i = ArgPos((char *)"-epsilon", argc, argv)) > 0) epsilon = atof(argv[i + 1]);
     if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
     total_samples *= 1000000;
     rho = init_rho;
