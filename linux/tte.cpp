@@ -965,7 +965,7 @@ void TrainLINE() {
     printf("--------------------------------\n");
 
 
-    // default settings
+    /* Default output settings */
 
     if (strlen(word_embedding_file) == 0)
         strcpy(word_embedding_file, "word_vec.txt");
@@ -988,7 +988,7 @@ void TrainLINE() {
     if (strlen(readable_topic_word_dist_file) == 0)
         strcpy(readable_topic_word_dist_file, "readable_tw_dist.txt");
 
-
+    /* Init hash tables */
     word_hash_table = InitHashTable();
     doc_hash_table = InitHashTable();
 
@@ -1000,12 +1000,17 @@ void TrainLINE() {
     printf("Number of documents: %d          \n", num_doc_vertices);
     printf("Number of topics: %d          \n", n_topics);
 
+
+    /* Init alias tables */
     InitAliasTable(num_ww_edges, ww_edge_weight, 0); // word-word network
     InitAliasTable(num_wd_edges, wd_edge_weight, 1); // word-doc network
+
+    /* Init text embeddings */
     word_emb_vertex = InitVector(num_word_vertices); // word
     doc_emb_vertex = InitVector(num_doc_vertices); // doc
     topic_emb_vertex = InitVector(n_topics); // topic
 
+    /* Init negative sampling and sigmoid tables */
     InitNegTable(WW_TYPE); // word-word network
     InitNegTable(WD_TYPE); // word-doc network
     InitSigmoidTable();
@@ -1025,20 +1030,24 @@ void TrainLINE() {
     clock_t finish = clock();
     printf("Total time: %lf\n", (double)(finish - start) / CLOCKS_PER_SEC);
 
+    /* Output text embeddings */
     OutputVector(word_embedding_file, word_emb_vertex, num_word_vertices, WORD_TYPE);
     OutputVector(doc_embedding_file, doc_emb_vertex, num_doc_vertices, DOC_TYPE);
     OutputVector(topic_embedding_file, topic_emb_vertex, n_topics, TOPIC_TYPE);
 
-    // Compute doc-topic and topic-word distributions
+    /* Init doc-topic and topic-word distributions */
     doc_topic_dist = InitCondDist(n_topics, num_doc_vertices);
     topic_word_dist = InitCondDist(num_word_vertices, n_topics);
 
+    /* Compute doc-topic and topic-word distributions */
     CalcCondDist(doc_topic_dist, topic_emb_vertex, doc_emb_vertex, n_topics, num_doc_vertices, 0, num_doc_vertices);
     CalcCondDist(topic_word_dist, word_emb_vertex, topic_emb_vertex, num_word_vertices, n_topics, 0, n_topics);
 
+    /* Output doc-topic and topic-word distributions */
     OutputCondDist(doc_topic_dist_file, doc_topic_dist, n_topics, num_doc_vertices, DT_TYPE); // doc-topic
     OutputCondDist(topic_word_dist_file, topic_word_dist, num_word_vertices, n_topics, DT_TYPE); // topic-word
 
+    /* Output readable doc-topic and topic-word distributions */
     OutputReadableCondDist(readable_doc_topic_dist_file, doc_topic_dist, n_topics, num_doc_vertices, min(5, n_topics), DT_TYPE);
     OutputReadableCondDist(readable_topic_word_dist_file, topic_word_dist, num_word_vertices, n_topics, min(5, num_word_vertices), TW_TYPE);
 
@@ -1047,7 +1056,6 @@ void TrainLINE() {
     free(word_emb_vertex);
     free(doc_emb_vertex);
     free(topic_emb_vertex);
-
     free(word_hash_table);
     free(doc_hash_table);
     free(ww_edge_source_id);
@@ -1129,7 +1137,5 @@ int main(int argc, char **argv) {
     TrainLINE();
     FreeVertex(word_vertex, num_word_vertices);
     FreeVertex(doc_vertex, num_doc_vertices);
-    // free(word_vertex);
-    // free(doc_vertex);
     return 0;
 }
