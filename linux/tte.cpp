@@ -41,18 +41,13 @@ const int hash_table_size = 30000000;
 const int neg_table_size = 1e8;
 const int sigmoid_table_size = 100000;
 
-
-typedef double real;                    // Precision of float numbers
+typedef double real;   // Precision of float numbers
 
 struct ClassVertex {
-    // double ww_degree; // if word vertex, word-word net out-degree; else, reserved
-    // double wd_degree; // if word vertex, word-doc net out-degree; else, reserved
     double degree[2]; // if word vertex, word-word network out-degree and word-doc network out-degree
     char *name;
 };
 
-
-// char network_file[MAX_STRING], embedding_file[MAX_STRING];
 char wwnet_file[MAX_STRING], wdnet_file[MAX_STRING], word_embedding_file[MAX_STRING], doc_embedding_file[MAX_STRING], topic_embedding_file[MAX_STRING], doc_topic_dist_file[MAX_STRING], topic_word_dist_file[MAX_STRING],
     readable_doc_topic_dist_file[MAX_STRING], readable_topic_word_dist_file[MAX_STRING];
 struct ClassVertex *word_vertex, *doc_vertex;
@@ -67,7 +62,6 @@ real **doc_topic_dist, **topic_word_dist;
 int *ww_edge_source_id, *ww_edge_target_id, *wd_edge_source_id, *wd_edge_target_id;
 double *ww_edge_weight, *wd_edge_weight;
 
-
 // Parameters for edge sampling
 long long *ww_alias, *wd_alias;
 double *ww_prob, *wd_prob;
@@ -75,24 +69,9 @@ double *ww_prob, *wd_prob;
 const gsl_rng_type * gsl_T;
 gsl_rng * gsl_r;
 
-
 // Generate uniform random numbers
 random_device                  rand_dev;
 mt19937                        generator(rand_dev());
-
-
-// // catch segfault
-// #include <signal.h>
-// void ouch(int sig)
-// {
-//     printf("OUCH! - I got signal %d\n", sig);
-// }
-
-// struct sigaction act;
-// act.sa_handler = ouch;
-// sigemptyset(&act.sa_mask);
-// act.sa_flags = 0;
-// sigaction(SIGINT, &act, 0);
 
 
 /* Build a hash table, mapping each vertex name to a unique vertex id */
@@ -211,7 +190,6 @@ void ReadData(char *network_file, int type)
 
     while (fgets(str, sizeof(str), fin)) (*num_edges)++;
     fclose(fin);
-    // printf("Number of edges: %lld          \n\n", *num_edges);
 
     edge_source_id = (int *)malloc(*num_edges*sizeof(int));
     edge_target_id = (int *)malloc(*num_edges*sizeof(int));
@@ -356,7 +334,6 @@ void InitAliasTable(long long num_edges, double *edge_weight, int type)
         free(large_block);
         exit(1);
     }
-
     free(norm_prob);
     free(small_block);
     free(large_block);
@@ -562,16 +539,13 @@ real CalcPartGrad(long long target_vertex, long long *sample_list, real *source_
         {
             x = dot(&source_emb_vertex[lu], &target_emb_vertex[lv], dim);
             log_pr += logl((double)FastSigmoid(x));
-            // printf("\n%LF    %f    %f", logl((double)FastSigmoid(x)), (double)FastSigmoid(x), x);
         }
         else // negative sample
         {
             x = dot(&source_emb_vertex[lu], &target_emb_vertex[lv], dim);
             log_pr += logl((double)FastSigmoid(-x));
-            // printf("\n%LF    %f    %f", logl((double)FastSigmoid(-x)), (double)FastSigmoid(-x), -x);
         }
     }
-
     x = exp(log_pr) * (log_pr + 1);
     return isnan(x)? 0 : x;
 }
@@ -594,15 +568,11 @@ void CalcCondDist(real **cond_dist, real *source_emb_vertex, real *target_emb_ve
             cond_dist[j][i] = exp(dot(&source_emb_vertex[lu], &target_emb_vertex[lv], dim));
             sum += cond_dist[j][i];
         }
-        // printf("\n%f", sum);
         // normalization
         for (i = 0; i != source_num_vertices; i++)
             cond_dist[j][i] /= sum;
     }
 }
-
-/* Approximate conditional distribution using negative sampling*/
-void ApproxCondDist(real *source_emb_vertex, real *target_emb_vertex){}
 
 //void TrainLINEThread(int id)
 void *TrainLINEThread(void *id)
@@ -612,7 +582,6 @@ void *TrainLINEThread(void *id)
     long long count = 0, last_count = 0, curedge;
     unsigned long long seed = (long long)id;
     real *vec_error = (real *)calloc(dim, sizeof(real));
-    // real *emb_vertex, *emb_context;
     long long *sample_list = (long long *)calloc(num_negative+1, sizeof(long long));
     real part_grad;
     real *pre_word_emb = InitVector(num_word_vertices); // word
@@ -625,7 +594,7 @@ void *TrainLINEThread(void *id)
         //judge for exit
         if (count > total_samples / num_threads + 2)
         {
-            // TODO: check convergence
+            // check convergence
             word_diff = dist_emb(word_emb_vertex, pre_word_emb, num_word_vertices);
             doc_diff = dist_emb(doc_emb_vertex, pre_doc_emb, num_doc_vertices);
             topic_diff = dist_emb(topic_emb_vertex, pre_topic_emb, n_topics);
@@ -633,7 +602,6 @@ void *TrainLINEThread(void *id)
                 printf("\nconverged: word_diff    %f, doc_diff    %f, topic_diff  %f", word_diff, doc_diff, topic_diff);
             else
                 printf("\nnot converged: word_diff    %f, doc_diff    %f, topic_diff  %f", word_diff, doc_diff, topic_diff);
-
             break;
         }
 
@@ -882,8 +850,7 @@ int sortByValue(const pair<string, real> &lhs, const pair<string, real> &rhs)
 }
 
 
-/* Output doc-topic and topic-word distributions */
-
+/* Output readable doc-topic and topic-word distributions */
 void OutputReadableCondDist(char *out_file, real **cond_dist, int size_vec, int n_select, int n_top, int type)
 {
     FILE *fo = fopen(out_file, "wb");
