@@ -53,9 +53,9 @@ char wwnet_file[MAX_STRING], wdnet_file[MAX_STRING], word_embedding_file[MAX_STR
 struct ClassVertex *word_vertex, *doc_vertex;
 int is_binary = 0, n_topics = 0, num_threads = 1, dim = 100, num_negative = 5, n_top = 5;
 int *word_hash_table, *doc_hash_table, *ww_neg_table, *wd_neg_table;
-int max_num_vertices = 1000, num_word_vertices = 0, num_doc_vertices = 0, num_topic_vertices = 0;
+int max_num_word_vertices = 1000, max_num_doc_vertices = 1000, num_word_vertices = 0, num_doc_vertices = 0, num_topic_vertices = 0;
 long long total_samples = 1, current_sample_count = 0, num_ww_edges = 0, num_wd_edges = 0;
-real init_rho = 0.025, rho, epsilon = 3.0;
+real init_rho = 0.025, rho, epsilon = 1e-6;
 real *word_emb_vertex, *doc_emb_vertex, *topic_emb_vertex, *sigmoid_table;
 real *word_emb_context, *doc_emb_context, *topic_emb_context;
 real **doc_topic_dist, **topic_word_dist;
@@ -72,6 +72,11 @@ gsl_rng * gsl_r;
 // Generate uniform random numbers
 random_device                  rand_dev;
 mt19937                        generator(rand_dev());
+
+
+/* global mutex variable */
+//pthread_mutex_t my_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 
 
 /* Build a hash table, mapping each vertex name to a unique vertex id */
@@ -113,14 +118,14 @@ int SearchHashTable(struct ClassVertex *vertex, int *vertex_hash_table, char *ke
 }
 
 /* Add a vertex to the vertex set */
-struct ClassVertex *AddVertex(int *vertex_hash_table, struct ClassVertex *vertex, int *num_vertices, char *name)
+struct ClassVertex *AddVertex(int *vertex_hash_table, struct ClassVertex *vertex, int *num_vertices, char *name, int *max_num_vertices)
 {
     int length = (int)strlen(name) + 1;
     if (length > MAX_STRING) length = MAX_STRING;
-    if (*num_vertices >= max_num_vertices)
+    if (*num_vertices >= *max_num_vertices)
     {
-        max_num_vertices += 1000;
-        struct ClassVertex *tmp = (struct ClassVertex *)realloc(vertex, max_num_vertices * sizeof(struct ClassVertex));
+        (*max_num_vertices) += 1000;
+        struct ClassVertex *tmp = (struct ClassVertex *)realloc(vertex, *max_num_vertices * sizeof(struct ClassVertex));
         if (tmp == NULL)
         {
             printf("Error: memory reallocation failed!\n");
@@ -129,11 +134,11 @@ struct ClassVertex *AddVertex(int *vertex_hash_table, struct ClassVertex *vertex
         vertex = tmp;
 
     }
+    vertex[*num_vertices].degree[0] = 0; // ww
+    vertex[*num_vertices].degree[1] = 0; // wd
     vertex[*num_vertices].name = (char *)calloc(length, sizeof(char));
     memcpy(vertex[*num_vertices].name, name, length - 1);
     vertex[*num_vertices].name[length - 1] = '\0';
-    vertex[*num_vertices].degree[0] = 0; // ww
-    vertex[*num_vertices].degree[1] = 0; // wd
     (*num_vertices)++;
 
     InsertHashTable(vertex_hash_table, name, *num_vertices - 1);
@@ -143,7 +148,7 @@ struct ClassVertex *AddVertex(int *vertex_hash_table, struct ClassVertex *vertex
 /* Read network from the training file */
 void ReadData(char *network_file, int type)
 {
-    int *source_num_vertices, *target_num_vertices;
+    int *source_num_vertices, *target_num_vertices, *source_max_num_vertices, *target_max_num_vertices;
     long long *num_edges = nullptr;
     struct ClassVertex *source_vertex, *target_vertex;
     int *source_hash_table, *target_hash_table;
@@ -154,6 +159,8 @@ void ReadData(char *network_file, int type)
     {
         source_num_vertices = &num_word_vertices;
         target_num_vertices = &num_word_vertices;
+        source_max_num_vertices = &max_num_word_vertices;
+        target_max_num_vertices = &max_num_word_vertices;
         num_edges = &num_ww_edges;
         source_vertex = word_vertex;
         target_vertex = word_vertex;
@@ -164,6 +171,8 @@ void ReadData(char *network_file, int type)
     {
         source_num_vertices = &num_word_vertices;
         target_num_vertices = &num_doc_vertices;
+        source_max_num_vertices = &max_num_word_vertices;
+        target_max_num_vertices = &max_num_doc_vertices;
         num_edges = &num_wd_edges;
         source_vertex = word_vertex;
         target_vertex = doc_vertex;
@@ -218,7 +227,7 @@ void ReadData(char *network_file, int type)
 
         if (vid == -1)
         {
-            source_vertex = AddVertex(source_hash_table, source_vertex, source_num_vertices, name_v1);
+            source_vertex = AddVertex(source_hash_table, source_vertex, source_num_vertices, name_v1, source_max_num_vertices);
             if (type == WW_TYPE) // word-word
                 target_vertex = source_vertex;
             vid = *source_num_vertices - 1;
@@ -235,7 +244,7 @@ void ReadData(char *network_file, int type)
         vid = SearchHashTable(target_vertex, target_hash_table, name_v2);
         if (vid == -1)
         {
-            target_vertex = AddVertex(target_hash_table, target_vertex, target_num_vertices, name_v2);
+            target_vertex = AddVertex(target_hash_table, target_vertex, target_num_vertices, name_v2, target_max_num_vertices);
             if (type == WW_TYPE) // word-word
                 source_vertex = target_vertex;
             vid = *target_num_vertices - 1;
@@ -485,7 +494,7 @@ real dist_emb(real *vec_u, real *vec_v, int num_vertices)
 {
     real x = 0;
     for (int c = 0; c != num_vertices * dim; c++) x += pow((vec_u[c] - vec_v[c]), 2);
-    return x / num_vertices / dim;
+    return x;
 }
 
 /* Fastly generate a random integer */
@@ -605,7 +614,16 @@ void *TrainLINEThread(void *id)
             break;
         }
 
-        if (count - last_count > 10000)
+
+        if (count == total_samples / num_threads + 2)
+        {
+            memcpy(pre_word_emb, word_emb_vertex, num_word_vertices * dim * sizeof(real));
+            memcpy(pre_doc_emb, doc_emb_vertex, num_doc_vertices * dim * sizeof(real));
+            memcpy(pre_topic_emb, topic_emb_vertex, n_topics * dim * sizeof(real));
+        }
+
+
+        if (count - last_count == 10000)
         {
             current_sample_count += count - last_count;
             last_count = count;
@@ -640,10 +658,14 @@ void *TrainLINEThread(void *id)
                 label = 0;
             }
             lu = source * dim;
+//            pthread_mutex_lock(&my_mutex);
             Update(&word_emb_vertex[lu], &word_emb_vertex[lv], vec_error, label);
+//            pthread_mutex_unlock(&my_mutex);
         }
         // update target embedding
+//        pthread_mutex_lock(&my_mutex);
         for (int c = 0; c != dim; c++) word_emb_vertex[c + lv] += vec_error[c];
+//        pthread_mutex_unlock(&my_mutex);
 
 
         // 2) sample an edge from Ewd and draw num_negative negative edges
@@ -668,10 +690,14 @@ void *TrainLINEThread(void *id)
                 label = 0;
             }
             lu = source * dim;
+//            pthread_mutex_lock(&my_mutex);
             Update(&word_emb_vertex[lu], &doc_emb_vertex[lv], vec_error, label);
+//            pthread_mutex_unlock(&my_mutex);
         }
         // update target embedding
+//        pthread_mutex_lock(&my_mutex);
         for (int c = 0; c != dim; c++) doc_emb_vertex[c + lv] += vec_error[c];
+//        pthread_mutex_unlock(&my_mutex);
 
 
         // 3) sample a pair of word-topic and draw num_negative "negative" pairs
@@ -705,11 +731,14 @@ void *TrainLINEThread(void *id)
             source = sample_list[d];
             label = (d == 0)? 1:0;
             lu = source * dim;
-
+//            pthread_mutex_lock(&my_mutex);
             Update2(&word_emb_vertex[lu], &topic_emb_vertex[lv], vec_error, label, part_grad);
+//            pthread_mutex_unlock(&my_mutex);
         }
         // update target embedding
+//        pthread_mutex_lock(&my_mutex);
         for (int c = 0; c != dim; c++) topic_emb_vertex[c + lv] += vec_error[c];
+//        pthread_mutex_unlock(&my_mutex);
 
 
         // 4) sample a pair of topic-doc and draw num_negative "negative" pairs
@@ -742,12 +771,14 @@ void *TrainLINEThread(void *id)
             source = sample_list[d];
             label = (d == 0)? 1:0;
             lu = source * dim;
-
+//            pthread_mutex_lock(&my_mutex);
             Update2(&topic_emb_vertex[lu], &doc_emb_vertex[lv], vec_error, label, part_grad);
+//            pthread_mutex_unlock(&my_mutex);
         }
         // update target embedding
+//        pthread_mutex_lock(&my_mutex);
         for (int c = 0; c != dim; c++) doc_emb_vertex[c + lv] += vec_error[c];
-
+//        pthread_mutex_unlock(&my_mutex);
         count++;
     }
     free(vec_error);
@@ -1101,8 +1132,8 @@ int main(int argc, char **argv) {
     if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
     total_samples *= 1000000;
     rho = init_rho;
-    word_vertex = (struct ClassVertex *)calloc(max_num_vertices, sizeof(struct ClassVertex));
-    doc_vertex = (struct ClassVertex *)calloc(max_num_vertices, sizeof(struct ClassVertex));
+    word_vertex = (struct ClassVertex *)calloc(max_num_word_vertices, sizeof(struct ClassVertex));
+    doc_vertex = (struct ClassVertex *)calloc(max_num_doc_vertices, sizeof(struct ClassVertex));
     TrainLINE();
     FreeVertex(word_vertex, num_word_vertices);
     FreeVertex(doc_vertex, num_doc_vertices);
