@@ -2,3 +2,6 @@
 *.o
 *.sh
 *.txt
+datasets/
+corpus/
+

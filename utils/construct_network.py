@@ -91,7 +91,7 @@ if __name__ == "__main__":
         word_word_freq_file = sys.argv[2]
         word_doc_freq_file = sys.argv[3]
     except:
-        corpus_path = "linux/corpus/20news-bydate/tiny/"
+        corpus_path = "linux/corpus/20news-bydate/20news-t20-d100/"
         word_word_freq_file = "word-word.txt"
         word_doc_freq_file = "word-doc.txt"
 
