@@ -51,11 +51,11 @@ struct ClassVertex {
 char wwnet_file[MAX_STRING], wdnet_file[MAX_STRING], word_embedding_file[MAX_STRING], doc_embedding_file[MAX_STRING], topic_embedding_file[MAX_STRING], doc_topic_dist_file[MAX_STRING], topic_word_dist_file[MAX_STRING],
     readable_doc_topic_dist_file[MAX_STRING], readable_topic_word_dist_file[MAX_STRING];
 struct ClassVertex *word_vertex, *doc_vertex;
-int is_binary = 0, n_topics = 0, num_threads = 1, dim = 100, num_negative = 5, n_top = 5;
-int *word_hash_table, *doc_hash_table, *ww_neg_table, *wd_neg_table;
+int is_binary = 0, n_topics = 0, num_threads = 1, dim = 100, num_negative = 5, n_top = 10;
+int *word_hash_table, *doc_hash_table, *ww_neg_table, *wd_neg_table, *wt_neg_table, *td_neg_table;
 int max_num_word_vertices = 1000, max_num_doc_vertices = 1000, num_word_vertices = 0, num_doc_vertices = 0, num_topic_vertices = 0;
 long long total_samples = 1, current_sample_count = 0, num_ww_edges = 0, num_wd_edges = 0;
-real init_rho = 0.025, rho, epsilon = 1e-6;
+real init_rho = 0.025, rho, epsilon = 1e-6, update_negtable_ratio = 0.01;
 real *word_emb_vertex, *doc_emb_vertex, *topic_emb_vertex, *sigmoid_table;
 real *word_emb_context, *doc_emb_context, *topic_emb_context;
 real **doc_topic_dist, **topic_word_dist;
@@ -115,6 +115,34 @@ int SearchHashTable(struct ClassVertex *vertex, int *vertex_hash_table, char *ke
         addr = (addr + 1) % hash_table_size;
     }
     return -1;
+}
+
+/* Fastly compute sigmoid function */
+void InitSigmoidTable()
+{
+    real x;
+    sigmoid_table = (real *)malloc((sigmoid_table_size + 1) * sizeof(real));
+    for (int k = 0; k != sigmoid_table_size; k++)
+    {
+        x = 2.0 * SIGMOID_BOUND * k / sigmoid_table_size - SIGMOID_BOUND;
+        sigmoid_table[k] = 1 / (1 + exp(-x));
+    }
+}
+
+real FastSigmoid(real x)
+{
+    if (x > SIGMOID_BOUND) return 1;
+    else if (x < -SIGMOID_BOUND) return 0;
+    int k = (x + SIGMOID_BOUND) * sigmoid_table_size / SIGMOID_BOUND / 2;
+    return sigmoid_table[k];
+}
+
+/* Compute dot product.*/
+real dot(real *vec_u, real *vec_v, int size)
+{
+    real x = 0;
+    for (int c = 0; c != size; c++) x += vec_u[c] * vec_v[c];
+    return x;
 }
 
 /* Add a vertex to the vertex set */
@@ -363,7 +391,7 @@ long long SampleAnEdge(double rand_value1, double rand_value2, int type)
         k = num_wd_edges * rand_value1;
         return rand_value2 < wd_prob[k] ? k : wd_alias[k];
     }
-   	else
+    else
     {
         printf("ERROR: unknown output type %d", type);
         exit(1);
@@ -386,7 +414,7 @@ real *InitVector(int num_vertices)
     // a = posix_memalign((void **)&emb_context, 128, (long long)num_vertices * dim * sizeof(real));
     // if (emb_context == NULL) { printf("Error: memory allocation failed\n"); exit(1); }
     // for (b = 0; b < dim; b++) for (a = 0; a < num_vertices; a++)
-    // 	emb_context[a * dim + b] = 0;
+    //  emb_context[a * dim + b] = 0;
     return emb_vertex;
 }
 
@@ -461,32 +489,51 @@ void InitNegTable(int type)
         wd_neg_table = neg_table;
 }
 
-/* Fastly compute sigmoid function */
-void InitSigmoidTable()
+
+/* Sample negative vertex samples according to vertex "popularity".
+ We cannot afford to compute "degrees" (i.e., sum of weights) for
+ negative sampling in word-topic and topic-doc networks. Thus, we
+ adopt a cheap way to achieve the same goal.
+ */
+int *InitNegTable4Topic(int *neg_table, real *vec_u, real *vec_v, int num_vec_u, int num_vec_v)
 {
+    int i, j;
+    // Compute mean of vec_v
     real x;
-    sigmoid_table = (real *)malloc((sigmoid_table_size + 1) * sizeof(real));
-    for (int k = 0; k != sigmoid_table_size; k++)
+    real *mean_vec_v = (real *)calloc(dim, sizeof(real));
+    for (i = 0; i < dim; i++)
     {
-        x = 2.0 * SIGMOID_BOUND * k / sigmoid_table_size - SIGMOID_BOUND;
-        sigmoid_table[k] = 1 / (1 + exp(-x));
+        x = 0;
+        for (j = 0; j < num_vec_v; j++)
+            x += vec_v[j * dim + i];
+        mean_vec_v[i] = x / num_vec_v;
     }
-}
 
-real FastSigmoid(real x)
-{
-    if (x > SIGMOID_BOUND) return 1;
-    else if (x < -SIGMOID_BOUND) return 0;
-    int k = (x + SIGMOID_BOUND) * sigmoid_table_size / SIGMOID_BOUND / 2;
-    return sigmoid_table[k];
-}
+    // Assign proportions
+    double sum = 0, cur_sum = 0, por = 0;
+    int vid = 0;
+    double *weight_vec = (double *)calloc(num_vec_u, sizeof(double));
 
-/* Compute dot product.*/
-real dot(real *vec_u, real *vec_v, int size)
-{
-    real x = 0;
-    for (int c = 0; c != size; c++) x += vec_u[c] * vec_v[c];
-    return x;
+    for (i = 0; i != num_vec_u; i++)
+    {
+        x = dot(&vec_u[i * dim], mean_vec_v, dim);
+        weight_vec[i] = pow(exp(x), NEG_SAMPLING_POWER);
+        sum += weight_vec[i];
+    }
+
+    for (i = 0; i != neg_table_size; i++)
+    {
+        if ((double)(i + 1) / neg_table_size > por)
+        {
+            cur_sum += weight_vec[vid];
+            por = cur_sum / sum;
+            vid++;
+        }
+        neg_table[i] = vid - 1;
+    }
+    free(mean_vec_v);
+    free(weight_vec);
+    return neg_table;
 }
 
 /* Compute distance between two embeddings*/
@@ -583,49 +630,64 @@ void CalcCondDist(real **cond_dist, real *source_emb_vertex, real *target_emb_ve
     }
 }
 
-//void TrainLINEThread(int id)
-void *TrainLINEThread(void *id)
+void *MonitorThread(void *id)
 {
-    int label;
-    long long u, v, lu, lv, source;
-    long long count = 0, last_count = 0, curedge;
-    unsigned long long seed = (long long)id;
-    real *vec_error = (real *)calloc(dim, sizeof(real));
-    long long *sample_list = (long long *)calloc(num_negative+1, sizeof(long long));
-    real part_grad;
+    real word_diff, doc_diff, topic_diff;
     real *pre_word_emb = InitVector(num_word_vertices); // word
     real *pre_doc_emb = InitVector(num_doc_vertices); // doc
     real *pre_topic_emb = InitVector(n_topics); // topic
-    real word_diff, doc_diff, topic_diff;
 
-    while (1)
+    while (current_sample_count < total_samples)
     {
-        //judge for exit
-        if (count > total_samples / num_threads + 2)
+        if (current_sample_count % (long long)(update_negtable_ratio * total_samples) == 0) // update topic realted neg_table
         {
-            // check convergence
-            word_diff = dist_emb(word_emb_vertex, pre_word_emb, num_word_vertices);
-            doc_diff = dist_emb(doc_emb_vertex, pre_doc_emb, num_doc_vertices);
-            topic_diff = dist_emb(topic_emb_vertex, pre_topic_emb, n_topics);
-            if (word_diff <= epsilon && doc_diff <= epsilon && topic_diff <= epsilon)
-                printf("\nconverged: word_diff    %f, doc_diff    %f, topic_diff  %f", word_diff, doc_diff, topic_diff);
-            else
-                printf("\nnot converged: word_diff    %f, doc_diff    %f, topic_diff  %f", word_diff, doc_diff, topic_diff);
-            break;
+            printf("update topic related neg_table");
+            InitNegTable4Topic(wt_neg_table, word_emb_vertex, topic_emb_vertex, num_word_vertices, n_topics); // word-topic
+            InitNegTable4Topic(td_neg_table, topic_emb_vertex, doc_emb_vertex, n_topics, num_doc_vertices); // topic-doc
         }
 
-
-        if (count == total_samples / num_threads + 2)
+        // check convergence
+        if (current_sample_count == total_samples - 1)
         {
+            printf("copy pre emb");
             memcpy(pre_word_emb, word_emb_vertex, num_word_vertices * dim * sizeof(real));
             memcpy(pre_doc_emb, doc_emb_vertex, num_doc_vertices * dim * sizeof(real));
             memcpy(pre_topic_emb, topic_emb_vertex, n_topics * dim * sizeof(real));
         }
+    }
+
+    word_diff = dist_emb(word_emb_vertex, pre_word_emb, num_word_vertices);
+    doc_diff = dist_emb(doc_emb_vertex, pre_doc_emb, num_doc_vertices);
+    topic_diff = dist_emb(topic_emb_vertex, pre_topic_emb, n_topics);
+    if (word_diff <= epsilon && doc_diff <= epsilon && topic_diff <= epsilon) printf("\nconverged");
+    else printf("\nnot converged");
+    printf("\nword_diff: %f, doc_diff: %f, topic_diff: %f\n", word_diff, doc_diff, topic_diff);
 
 
+    free(pre_word_emb);
+    free(pre_doc_emb);
+    free(pre_topic_emb);
+    pthread_exit(NULL);
+}
+
+
+void *TrainLINEThread(void *id)
+{
+    int label;
+    long long u, v, lu, lv, source;
+    long long last_count = 0, count, curedge;
+    unsigned long long seed = (long long)id;
+    real *vec_error = (real *)calloc(dim, sizeof(real));
+    long long *sample_list = (long long *)calloc(num_negative+1, sizeof(long long));
+    real part_grad;
+    long long batch_size = total_samples / num_threads;
+    if ((long long)id == 0) batch_size = total_samples - batch_size * (num_threads - 1);
+
+
+    for (count = 0; count < batch_size; count++)
+    {
         if (count - last_count == 10000)
         {
-            current_sample_count += count - last_count;
             last_count = count;
             printf("%cRho: %f  Progress: %.3lf%%", 13, rho, (real)current_sample_count / (real)(total_samples + 1) * 100);
             fflush(stdout);
@@ -720,7 +782,7 @@ void *TrainLINEThread(void *id)
             }
             else // negative samples
             {
-                sample_list[d] = word_distr(generator); // uniformly samples a negative edge
+                sample_list[d] = wt_neg_table[Rand(seed)]; // samples a negative edge
             }
         }
 
@@ -760,7 +822,7 @@ void *TrainLINEThread(void *id)
             }
             else // negative samples
             {
-                sample_list[d] = topic_distr(generator); // uniformly samples a negative edge
+                sample_list[d] = td_neg_table[Rand(seed)]; // samples a negative edge
             }
         }
 
@@ -779,7 +841,8 @@ void *TrainLINEThread(void *id)
 //        pthread_mutex_lock(&my_mutex);
         for (int c = 0; c != dim; c++) doc_emb_vertex[c + lv] += vec_error[c];
 //        pthread_mutex_unlock(&my_mutex);
-        count++;
+
+        current_sample_count += 1;
     }
     free(vec_error);
     free(sample_list);
@@ -953,7 +1016,7 @@ void OutputReadableCondDist(char *out_file, real **cond_dist, int size_vec, int 
 
 void TrainLINE() {
     long a;
-    pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
+    pthread_t *pt = (pthread_t *)malloc((num_threads + 1) * sizeof(pthread_t));
 
     printf("--------------------------------\n");
     printf("Samples: %lldM\n", total_samples / 1000000);
@@ -1011,6 +1074,9 @@ void TrainLINE() {
     /* Init negative sampling and sigmoid tables */
     InitNegTable(WW_TYPE); // word-word network
     InitNegTable(WD_TYPE); // word-doc network
+    wt_neg_table = (int *)malloc(neg_table_size * sizeof(int)); // word-topic network
+    td_neg_table = (int *)malloc(neg_table_size * sizeof(int)); // topic-doc network
+
     InitSigmoidTable();
 
     gsl_rng_env_setup();
@@ -1021,8 +1087,10 @@ void TrainLINE() {
 
     clock_t start = clock();
     printf("--------------------------------\n");
+    pthread_create(&pt[num_threads], NULL, MonitorThread, (void *)(long)num_threads); // monitor thread
     for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainLINEThread, (void *)a);
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
+    pthread_join(pt[num_threads], NULL);
 
     printf("\n");
     clock_t finish = clock();
@@ -1068,6 +1136,8 @@ void TrainLINE() {
     free(wd_prob);
     free(ww_neg_table);
     free(wd_neg_table);
+    free(wt_neg_table);
+    free(td_neg_table);
     free(sigmoid_table);
     FreeCondDist(doc_topic_dist, num_doc_vertices);
     FreeCondDist(topic_word_dist, num_topic_vertices);
